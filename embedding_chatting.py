@@ -1,3 +1,5 @@
+import os
+
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.document_loaders import DataFrameLoader
 from langchain_chroma import Chroma
@@ -7,6 +9,14 @@ import tiktoken
 import json
 import datetime
 from math import ceil
+
+from langchain import LLMChain
+from langchain_openai import ChatOpenAI
+from langchain.prompts import (
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+    ChatPromptTemplate,
+)
 
 if False:
     EMBEDDING_PATH = f"embeddings/{datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S')}/"
@@ -37,23 +47,21 @@ if False:
     db = Chroma.from_documents(loader.load(), embedding=oai_embeddings, persist_directory=EMBEDDING_PATH)
 
 if True:
-    EMBEDDING_PATH = "embeddings/2024-06-03 17-23-07/"
-    db = Chroma(persist_directory=EMBEDDING_PATH)
-
     system_prompt = SystemMessagePromptTemplate.from_template("""
-    **Initial Prompt:**
-
-    You are "Professor Jongwon Kim," a highly respected expert in Computer Science. You have published extensively on topics within the field, and your publications are provided as embeddings that you can reference to answer questions accurately. Follow these guidelines:
-    
-    1. **Reference Embeddings**: Access and utilize the provided embeddings of your publications to inform your answers.
-    2. **Focus on Accuracy**: Prioritize accuracy and detail, grounding your responses in the content of your publications.
-    3. **Educational Tone**: Maintain an authoritative and educational tone suitable for a university professor.
-    4. **Clarify Complex Concepts**: Break down complex concepts into understandable terms without oversimplifying.
+    **Initial Prompt:** You are "Professor Jongwon Kim," a distinguished Computer Science expert with extensive publications provided in this prompt. Your responses should adhere to the following guidelines:
+    1. **Reference Publications**: Use the provided publications to inform your answers.
+    2. **Focus on Accuracy**: Ensure all answers are detailed and accurate, grounding responses in the content of your publications.
+    3. **Educational Tone**: Maintain an authoritative, educational tone expected from a university professor.
+    4. **Clarify Concepts**: Simplify complex concepts without oversimplifying.
     5. **Language Handling**: 
-       - If the user's language is not English, translate the input into English.
-       - Process the translated input as if it were originally in English.
-       - Translate the response back into the user's language before delivering the final answer.
-    6. **Engage with Inquiries**: Address all parts of a question thoroughly and invite follow-up questions for further clarification if needed.
+       - Translate non-English input to English.
+       - Process input as if originally in English.
+       - Translate responses back to the user's language.
+    6. **Engage with Inquiries**: Address all question components thoroughly and invite follow-up questions.
+    
+    **Your Publications**
+    All publications are given as title: abstract pair.
+    {publications}
     """)
     human_prompt = HumanMessagePromptTemplate.from_template("{query}")
     chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
@@ -61,18 +69,15 @@ if True:
     chat = ChatOpenAI(model_name="gpt-4o", temperature=0)
     chain = LLMChain(llm=chat, prompt=chat_prompt)
 
+    with open('publications_summarized.txt', 'r') as f:
+        publications = f.read()
+
     while True:
         message = input("User: ")
         if message:
-            subjects = get_question_subject(message) + [message]
-            document_nested_headings, documents = get_vector_search_results(subjects)
-            samples = format_samples(document_nested_headings, documents)
-
-            result = chain.invoke({"samples": samples, "query": message})
+            result = chain.invoke({"publications": publications, "query": message})
         else:
             break
 
-        sample_titles = '\n'.join([sample['title'] for sample in json.loads(samples)])
-        print(f"Reference Documents:\n{sample_titles}\n")
         print("ChatBot Response:\n")
         print(result['text'])

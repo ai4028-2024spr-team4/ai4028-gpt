@@ -69,7 +69,7 @@ if False:
     with open(f"publications_txt/filtered.json", "w") as f:
         json.dump(filter_result, f)
 
-if True:
+if False:
     RETRIES = 10
     with open(f"publications_txt/filtered.json", "r") as f:
         filter_result = json.load(f)
@@ -240,5 +240,135 @@ if True:
                             with open(f'publications_summarized/{file}', 'w') as summarized_file:
                                 summarized_file.write(result["result"])
                             print(f"{now()}: {file}: DONE: Token Count: {len(tiktoken.get_encoding('cl100k_base').encode(result['result']))}")
+                            break
+
+if True:
+    RETRIES = 10
+    with open(f"publications_txt/filtered.json", "r") as f:
+        filter_result = json.load(f)
+
+    for file in filter_result:
+        if filter_result[file]["result"] is False:
+            continue
+        with open(f'publications_txt/{file}', 'r') as f:
+            text = f.read()
+            messages = [{
+                "role": "system", "content": """
+                Extract the abstract part from the given article. DO NOT ADD ANY ADDITIONAL INFORMATION.
+                **Output Format:**
+                - The edited content must be provided in the following JSON format:
+                ```json
+                {"result": "<result>"}
+                ```
+
+                **Begin with:**
+                """
+            },
+                {"role": "user", "content": text}
+            ]
+            min_token_limit = 1
+            print(f"{now()}: {file}: Initiating Chat...")
+            while True:
+                for trial in range(RETRIES):
+                    try:
+                        print(
+                            f"{now()}: {file}: Requesting with {len(messages)} messages, {min_token_limit} min token limit...")
+                        completion = openai.chat.completions.create(
+                            model="gpt-4o",
+                            messages=messages,
+                            response_format={"type": "json_object"},
+                            tools=[{
+                                "type": "function",
+                                "function": {
+                                    "name": "cl100k_base_tokenizer",
+                                    "description": "Returns the token count of the input text using the cl100k_base tokenizer. Returns '!JSON' if given json is invalid.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "text": {
+                                                "type": "string",
+                                                "description": "The text to be tokenized."
+                                            }
+                                        },
+                                        "required": ["text"],
+                                    }
+                                }
+                            }],
+                            max_tokens=4095,
+                            timeout=1200
+                        )
+                    except openai.InternalServerError:
+                        print(f"{now()}: {file}: Internal Server Error, Retrying {trial}/{RETRIES}...")
+                        continue
+                    else:
+                        break
+                resp = completion.choices[-1].message
+                print(f"{now()}: {file}: Choices: {len(completion.choices)}")
+                if resp.tool_calls:
+                    functions = {
+                        "cl100k_base_tokenizer": lambda text: str(
+                            len(tiktoken.get_encoding("cl100k_base").encode(text)))
+                    }
+                    messages.append(resp)
+                    for tool_call in resp.tool_calls:
+                        try:
+                            args = json.loads(tool_call.function.arguments)
+                        except json.decoder.JSONDecodeError:
+                            print(f"{now()}: {file}: JSON Decode Error")
+                            resp = "!JSON"
+                        else:
+                            if tool_call.function.name not in functions:
+                                print(tool_call)
+                                sys.exit(-1)
+                            resp = functions[tool_call.function.name](**args)
+                        print(f"{now()}: {file}: Function call invoked, {tool_call.function.name}: RESPONSE: {resp}")
+                        messages.append({
+                            "tool_call_id": tool_call.id,
+                            "role": "tool",
+                            "name": tool_call.function.name,
+                            "content": resp
+                        })
+                else:
+                    print(f"{now()}: {file}: No function call invoked")
+                    if len(messages) > 15:
+                        # 메시지가 너무 길어짐. 얘가 context를 잘 들고있는지 의문
+                        print(f"{now()}: {file}: FAILED! FAILED! FAILED! Too long message")
+                        print(resp.content)
+                        # sys.exit(-1)
+                        break
+                    try:
+                        result = json.loads(resp.content)
+                        token_count = len(tiktoken.get_encoding('cl100k_base').encode(result['result']))
+                    except json.decoder.JSONDecodeError:
+                        print(f"{now()}: {file}: JSON Decode failed, Retrying")
+                        messages.append(resp)
+                        messages.append({"role": "user",
+                                         "content": "The result you've given does not satisfy ouptut format, which is JSON `{'result': <result>}`. Please try again."})
+                    except KeyError:
+                        print(f"{now()}: {file}: Key Error, Retrying")
+                        messages.append(resp)
+                        messages.append({"role": "user",
+                                         "content": "The result you've given does not satisfy ouptut format, which is JSON `{'result': <result>}`. Please try again."})
+                    else:
+                        if token_count < 20:
+                            # token_count < 20: GPT가 context를 완전히 잃어버림
+                            print(f"{now()}: {file}: FAILED! FAILED! FAILED! Too few token after several retries")
+                            # sys.exit(-1)
+                            break
+                        if token_count < min_token_limit:
+                            print(f"{now()}: {file}: Too few tokens ({token_count}), Retrying")
+                            messages.append(resp)
+                            messages.append({"role": "user",
+                                             "content": f"The result you've given is below minimum token count requirement. Please try again. Your result contains {token_count} tokens now."})
+                        elif token_count > 500:
+                            print(f"{now()}: {file}: Too many tokens ({token_count}), Retrying")
+                            messages.append(resp)
+                            messages.append({"role": "user",
+                                             f"content": f"The result you've given exceeds the token limit. Please try again.  Your result contains {token_count} tokens now."})
+                        else:
+                            with open(f'publications_summarized/{file}', 'w') as summarized_file:
+                                summarized_file.write(result["result"])
+                            print(
+                                f"{now()}: {file}: DONE: Token Count: {len(tiktoken.get_encoding('cl100k_base').encode(result['result']))}")
                             break
 
